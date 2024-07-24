@@ -1,3 +1,4 @@
+
 @echo off
 setlocal
 
@@ -16,7 +17,7 @@ rem Restart the system
 shutdown /r /t 0
 timeout /t 60 /nobreak
 
-rem Ensure that we are now in Safe Mode
+rem After reboot, we should be in Safe Mode
 :SafeMode
 rem Check if we are in Safe Mode with Networking
 if /i "%SAFEBOOT_OPTION%"=="network" (
