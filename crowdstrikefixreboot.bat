@@ -9,6 +9,19 @@ if %errorLevel% neq 0 (
     exit /b 1
 )
 
+rem Create a scheduled task to run this script after user logon
+set taskName=BootAndCleanup
+set taskFile=%~dp0%~nx0
+schtasks /create /tn %taskName% /tr "\"%taskFile%\" -run" /sc onlogon /f
+if %errorLevel% neq 0 (
+    echo Failed to create scheduled task.
+    pause
+    exit /b 1
+)
+
+rem If the script is running with the -run parameter, proceed with the cleanup
+if "%1" == "-run" goto :RunScript
+
 rem Suspend BitLocker on the system drive
 manage-bde -protectors -disable %SystemDrive%
 if %errorLevel% neq 0 (
@@ -22,7 +35,9 @@ bcdedit /set {current} safeboot network
 
 rem Restart the system
 shutdown /r /t 0
+exit /b 0
 
+:RunScript
 rem Wait for the system to restart
 timeout /t 120 /nobreak
 
@@ -83,5 +98,3 @@ if /i "%SAFEBOOT_OPTION%"=="network" (
 )
 
 endlocal
-
-
