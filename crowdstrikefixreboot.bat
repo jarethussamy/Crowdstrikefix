@@ -9,6 +9,14 @@ if %errorLevel% neq 0 (
     exit /b 1
 )
 
+rem Suspend BitLocker on the system drive
+manage-bde -protectors -disable %SystemDrive%
+if %errorLevel% neq 0 (
+    echo Failed to suspend BitLocker protection.
+    pause
+    exit /b 1
+)
+
 rem Boot into Safe Mode with Networking
 bcdedit /set {current} safeboot network
 
@@ -46,13 +54,34 @@ if /i "%SAFEBOOT_OPTION%"=="network" (
     rem Boot back into normal mode
     bcdedit /deletevalue {current} safeboot
 
+    rem Resume BitLocker protection
+    manage-bde -protectors -enable %SystemDrive%
+    if %errorLevel% neq 0 (
+        echo Failed to resume BitLocker protection.
+        pause
+        exit /b 1
+    )
+
     rem Restart the system again
     shutdown /r /t 0
+    exit /b 0
 ) else (
-    echo The system is not in Safe Mode. Exiting...
+    rem If we are not in Safe Mode, ensure we boot normally
+    bcdedit /deletevalue {current} safeboot
+
+    rem Resume BitLocker protection
+    manage-bde -protectors -enable %SystemDrive%
+    if %errorLevel% neq 0 (
+        echo Failed to resume BitLocker protection.
+        pause
+        exit /b 1
+    )
+
+    echo The system is not in Safe Mode. Ensuring normal boot and exiting...
     pause
     exit /b 1
 )
 
 endlocal
+
 
