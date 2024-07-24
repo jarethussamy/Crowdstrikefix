@@ -9,16 +9,6 @@ if %errorLevel% neq 0 (
     exit /b 1
 )
 
-rem Create a scheduled task to run this script after user logon
-set taskName=BootAndCleanup
-set taskFile=%~dp0%~nx0
-schtasks /create /tn %taskName% /tr "\"%taskFile%\" -run" /sc onlogon /f
-if %errorLevel% neq 0 (
-    echo Failed to create scheduled task.
-    pause
-    exit /b 1
-)
-
 rem If the script is running with the -run parameter, proceed with the cleanup
 if "%1" == "-run" goto :RunScript
 
@@ -33,18 +23,24 @@ if %errorLevel% neq 0 (
 rem Boot into Safe Mode with Networking
 bcdedit /set {current} safeboot network
 
+rem Create a scheduled task to run this script after user logon in Safe Mode
+schtasks /create /tn BootAndCleanup /tr "\"%~dpnx0\" -run" /sc onstart /f
+
 rem Restart the system
 shutdown /r /t 0
 exit /b 0
 
 :RunScript
 rem Wait for the system to restart
-timeout /t 120 /nobreak
+timeout /t 60 /nobreak
 
 rem After reboot, we should be in Safe Mode
-:SafeMode
 rem Check if we are in Safe Mode
+echo Checking Safe Mode status...
+for /f "tokens=2 delims=[]" %%i in ('bcdedit /enum {current} ^| findstr /r /c:"safeboot"') do set "SAFEBOOT_OPTION=%%i"
 if /i "%SAFEBOOT_OPTION%"=="network" (
+    echo System is in Safe Mode with Networking
+
     rem Navigate to the CrowdStrike directory
     cd /d %WINDIR%\System32\drivers\CrowdStrike
     
@@ -82,6 +78,7 @@ if /i "%SAFEBOOT_OPTION%"=="network" (
     exit /b 0
 ) else (
     rem If we are not in Safe Mode, ensure we boot normally
+    echo System is not in Safe Mode. Exiting...
     bcdedit /deletevalue {current} safeboot
 
     rem Resume BitLocker protection
@@ -92,7 +89,6 @@ if /i "%SAFEBOOT_OPTION%"=="network" (
         exit /b 1
     )
 
-    echo The system is not in Safe Mode. Ensuring normal boot and exiting...
     pause
     exit /b 1
 )
