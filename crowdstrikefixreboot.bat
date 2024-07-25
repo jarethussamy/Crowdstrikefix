@@ -1,3 +1,4 @@
+
 @echo off
 setlocal
 
@@ -55,10 +56,9 @@ if %errorLevel% neq 0 (
 )
 
 :RunScript
-rem Wait for the system to restart
+rem Wait for the system to restart and log back in
 timeout /t 60 /nobreak
 
-rem After reboot, we should be in Safe Mode
 rem Check if we are in Safe Mode
 echo Checking Safe Mode status... >> "%LOG_FILE%"
 for /f "tokens=2 delims=[]" %%i in ('bcdedit /enum {current} ^| findstr /r /c:"safeboot"') do set "SAFEBOOT_OPTION=%%i"
@@ -112,7 +112,7 @@ if /i "%SAFEBOOT_OPTION%"=="network" (
         exit /b 1
     )
 
-    rem Restart the system again
+    rem Restart the system again to ensure normal boot
     echo Restarting the system again... >> "%LOG_FILE%"
     shutdown /r /t 0
     if %errorLevel% neq 0 (
