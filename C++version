@@ -1,0 +1,319 @@
+#include <windows.h>
+#include <iostream>
+#include <string>
+#include <fstream>
+#include <ctime>
+#include <vector>
+#include <filesystem>
+#include <shellapi.h>
+#include <comdef.h>
+
+class CrowdStrikeFix {
+private:
+    std::string logFile;
+    std::ofstream logStream;
+
+    void writeLog(const std::string& message) {
+        std::time_t now = std::time(0);
+        char* timeStr = std::ctime(&now);
+        timeStr[strlen(timeStr) - 1] = '\0'; // Remove newline
+        
+        logStream << "[" << timeStr << "] " << message << std::endl;
+        logStream.flush();
+        std::cout << message << std::endl;
+    }
+
+    bool isRunningAsAdmin() {
+        BOOL isAdmin = FALSE;
+        HANDLE token = NULL;
+        
+        if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+            TOKEN_ELEVATION elevation;
+            DWORD size = sizeof(TOKEN_ELEVATION);
+            
+            if (GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size)) {
+                isAdmin = elevation.TokenIsElevated;
+            }
+            CloseHandle(token);
+        }
+        return isAdmin == TRUE;
+    }
+
+    bool executePowerShellCommand(const std::string& command) {
+        std::string fullCommand = "powershell.exe -Command \"" + command + "\"";
+        
+        STARTUPINFOA si = { sizeof(si) };
+        PROCESS_INFORMATION pi;
+        
+        if (CreateProcessA(NULL, const_cast<char*>(fullCommand.c_str()), 
+                          NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+            WaitForSingleObject(pi.hProcess, INFINITE);
+            
+            DWORD exitCode;
+            GetExitCodeProcess(pi.hProcess, &exitCode);
+            
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+            
+            return exitCode == 0;
+        }
+        return false;
+    }
+
+    bool executeCommand(const std::string& command) {
+        STARTUPINFOA si = { sizeof(si) };
+        PROCESS_INFORMATION pi;
+        
+        if (CreateProcessA(NULL, const_cast<char*>(command.c_str()), 
+                          NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+            WaitForSingleObject(pi.hProcess, INFINITE);
+            
+            DWORD exitCode;
+            GetExitCodeProcess(pi.hProcess, &exitCode);
+            
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+            
+            return exitCode == 0;
+        }
+        return false;
+    }
+
+    bool suspendBitLocker() {
+        writeLog("Suspending BitLocker protection...");
+        std::string command = "manage-bde -protectors -disable C:";
+        
+        if (executeCommand(command)) {
+            writeLog("BitLocker protection suspended successfully.");
+            return true;
+        } else {
+            writeLog("Failed to suspend BitLocker protection.");
+            return false;
+        }
+    }
+
+    bool resumeBitLocker() {
+        writeLog("Resuming BitLocker protection...");
+        std::string command = "manage-bde -protectors -enable C:";
+        
+        if (executeCommand(command)) {
+            writeLog("BitLocker protection resumed successfully.");
+            return true;
+        } else {
+            writeLog("Failed to resume BitLocker protection.");
+            return false;
+        }
+    }
+
+    bool setSafeMode() {
+        writeLog("Configuring Safe Mode with Networking...");
+        std::string command = "bcdedit /set {current} safeboot network";
+        
+        if (executeCommand(command)) {
+            writeLog("Safe Mode with Networking configured successfully.");
+            return true;
+        } else {
+            writeLog("Failed to set Safe Mode with Networking.");
+            return false;
+        }
+    }
+
+    bool clearSafeMode() {
+        writeLog("Configuring boot back to normal mode...");
+        std::string command = "bcdedit /deletevalue {current} safeboot";
+        
+        if (executeCommand(command)) {
+            writeLog("Boot configuration reset to normal mode.");
+            return true;
+        } else {
+            writeLog("Failed to reset boot configuration.");
+            return false;
+        }
+    }
+
+    bool createScheduledTask() {
+        writeLog("Creating scheduled task...");
+        
+        // Get current executable path
+        char exePath[MAX_PATH];
+        GetModuleFileNameA(NULL, exePath, MAX_PATH);
+        
+        std::string taskCommand = "schtasks /create /tn BootAndCleanup /tr \"" + 
+                                 std::string(exePath) + " -run\" /sc onstart /f";
+        
+        if (executeCommand(taskCommand)) {
+            writeLog("Scheduled task created successfully.");
+            return true;
+        } else {
+            writeLog("Failed to create scheduled task.");
+            return false;
+        }
+    }
+
+    bool restartSystem() {
+        writeLog("Restarting the system...");
+        
+        // Enable the shutdown privilege
+        HANDLE token;
+        TOKEN_PRIVILEGES tkp;
+        
+        if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) {
+            LookupPrivilegeValue(NULL, SE_SHUTDOWN_NAME, &tkp.Privileges[0].Luid);
+            tkp.PrivilegeCount = 1;
+            tkp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+            AdjustTokenPrivileges(token, FALSE, &tkp, 0, (PTOKEN_PRIVILEGES)NULL, 0);
+            CloseHandle(token);
+        }
+        
+        return ExitWindowsEx(EWX_REBOOT | EWX_FORCE, SHTDN_REASON_MAJOR_SOFTWARE);
+    }
+
+    bool isInSafeMode() {
+        writeLog("Checking Safe Mode status...");
+        
+        // Check if we're in safe mode by reading registry or using GetSystemMetrics
+        int safeMode = GetSystemMetrics(SM_CLEANBOOT);
+        
+        if (safeMode > 0) {
+            writeLog("System is in Safe Mode");
+            return true;
+        } else {
+            writeLog("System is not in Safe Mode");
+            return false;
+        }
+    }
+
+    bool deleteCrowdStrikeFiles() {
+        writeLog("Navigating to CrowdStrike directory...");
+        
+        std::string crowdStrikeDir = "C:\\Windows\\System32\\drivers\\CrowdStrike";
+        
+        try {
+            if (!std::filesystem::exists(crowdStrikeDir)) {
+                writeLog("CrowdStrike directory not found.");
+                return false;
+            }
+            
+            bool fileDeleted = false;
+            
+            // Look for files matching the pattern C-00000291*.sys
+            for (const auto& entry : std::filesystem::directory_iterator(crowdStrikeDir)) {
+                if (entry.is_regular_file()) {
+                    std::string filename = entry.path().filename().string();
+                    
+                    // Check if filename matches the pattern
+                    if (filename.find("C-00000291") == 0 && filename.ends_with(".sys")) {
+                        writeLog("Found matching file: " + filename);
+                        
+                        try {
+                            std::filesystem::remove(entry.path());
+                            writeLog("Deleted file: " + filename);
+                            fileDeleted = true;
+                        } catch (const std::exception& e) {
+                            writeLog("Failed to delete file: " + filename + " - " + e.what());
+                        }
+                    }
+                }
+            }
+            
+            // Show confirmation dialog
+            std::string message;
+            if (fileDeleted) {
+                message = "File(s) deleted successfully.";
+            } else {
+                message = "No matching file found to delete.";
+            }
+            
+            MessageBoxA(NULL, message.c_str(), "Confirmation", MB_OK | MB_ICONINFORMATION);
+            writeLog(message);
+            
+            return fileDeleted;
+            
+        } catch (const std::exception& e) {
+            writeLog("Error accessing CrowdStrike directory: " + std::string(e.what()));
+            return false;
+        }
+    }
+
+public:
+    CrowdStrikeFix() {
+        // Initialize log file in temp directory
+        char tempPath[MAX_PATH];
+        GetTempPathA(MAX_PATH, tempPath);
+        logFile = std::string(tempPath) + "boot_and_cleanup.log";
+        
+        logStream.open(logFile, std::ios::app);
+        writeLog("Script started");
+    }
+
+    ~CrowdStrikeFix() {
+        logStream.close();
+    }
+
+    int run(bool isRunPhase = false) {
+        if (!isRunningAsAdmin()) {
+            writeLog("This program must be run as an administrator.");
+            MessageBoxA(NULL, "This program must be run as an administrator.", "Error", MB_OK | MB_ICONERROR);
+            return 1;
+        }
+
+        if (!isRunPhase) {
+            // Initial setup phase
+            if (!suspendBitLocker()) {
+                return 1;
+            }
+
+            if (!setSafeMode()) {
+                return 1;
+            }
+
+            if (!createScheduledTask()) {
+                return 1;
+            }
+
+            if (!restartSystem()) {
+                writeLog("Failed to restart the system.");
+                return 1;
+            }
+        } else {
+            // Run phase (after restart in safe mode)
+            Sleep(60000); // Wait 60 seconds
+            
+            if (isInSafeMode()) {
+                deleteCrowdStrikeFiles();
+                
+                if (!clearSafeMode()) {
+                    return 1;
+                }
+                
+                if (!resumeBitLocker()) {
+                    return 1;
+                }
+                
+                if (!restartSystem()) {
+                    writeLog("Failed to restart the system again.");
+                    return 1;
+                }
+            } else {
+                writeLog("System is not in Safe Mode. Exiting...");
+                clearSafeMode();
+                resumeBitLocker();
+                return 1;
+            }
+        }
+        
+        return 0;
+    }
+};
+
+int main(int argc, char* argv[]) {
+    CrowdStrikeFix fix;
+    
+    // Check if this is the run phase (called by scheduled task)
+    bool isRunPhase = false;
+    if (argc > 1 && std::string(argv[1]) == "-run") {
+        isRunPhase = true;
+    }
+    
+    return fix.run(isRunPhase);
+}
